@@ -41952,6 +41952,7 @@ var GetAttendanceStatsResponse = objectType({
   "presentDays": numberType(),
   "absentDays": numberType(),
   "lateDays": numberType(),
+  "leaveDays": numberType(),
   "avgWorkedHours": numberType()
 });
 var GetDashboardSummaryResponse = objectType({
@@ -44770,10 +44771,10 @@ var PgEnumColumn = class extends PgColumn {
 // ../../node_modules/.pnpm/drizzle-orm@0.45.2_@types+pg@8.20.0_pg@8.20.0/node_modules/drizzle-orm/subquery.js
 var Subquery = class {
   static [entityKind] = "Subquery";
-  constructor(sql3, fields, alias, isWith = false, usedTables = []) {
+  constructor(sql2, fields, alias, isWith = false, usedTables = []) {
     this._ = {
       brand: "Subquery",
-      sql: sql3,
+      sql: sql2,
       selectedFields: fields,
       alias,
       isWith,
@@ -45174,19 +45175,19 @@ function sql(strings, ...params) {
   }
   return new SQL(queryChunks);
 }
-((sql22) => {
+((sql2) => {
   function empty() {
     return new SQL([]);
   }
-  sql22.empty = empty;
+  sql2.empty = empty;
   function fromList(list) {
     return new SQL(list);
   }
-  sql22.fromList = fromList;
+  sql2.fromList = fromList;
   function raw(str) {
     return new SQL([new StringChunk(str)]);
   }
-  sql22.raw = raw;
+  sql2.raw = raw;
   function join2(chunks, separator) {
     const result = [];
     for (const [i, chunk] of chunks.entries()) {
@@ -45197,24 +45198,24 @@ function sql(strings, ...params) {
     }
     return new SQL(result);
   }
-  sql22.join = join2;
+  sql2.join = join2;
   function identifier(value) {
     return new Name(value);
   }
-  sql22.identifier = identifier;
+  sql2.identifier = identifier;
   function placeholder2(name2) {
     return new Placeholder(name2);
   }
-  sql22.placeholder = placeholder2;
+  sql2.placeholder = placeholder2;
   function param2(value, encoder) {
     return new Param(value, encoder);
   }
-  sql22.param = param2;
+  sql2.param = param2;
 })(sql || (sql = {}));
 ((SQL2) => {
   class Aliased {
-    constructor(sql22, fieldAlias) {
-      this.sql = sql22;
+    constructor(sql2, fieldAlias) {
+      this.sql = sql2;
       this.fieldAlias = fieldAlias;
     }
     static [entityKind] = "SQL.Aliased";
@@ -47911,8 +47912,8 @@ var PgDialect = class {
       return "none";
     }
   }
-  sqlToQuery(sql22, invokeSource) {
-    return sql22.toQuery({
+  sqlToQuery(sql2, invokeSource) {
+    return sql2.toQuery({
       casing: this.casing,
       escapeName: this.escapeName,
       escapeParam: this.escapeParam,
@@ -50271,10 +50272,10 @@ var PgRelationalQuery = class extends QueryPromise {
 
 // ../../node_modules/.pnpm/drizzle-orm@0.45.2_@types+pg@8.20.0_pg@8.20.0/node_modules/drizzle-orm/pg-core/query-builders/raw.js
 var PgRaw = class extends QueryPromise {
-  constructor(execute, sql3, query, mapBatchResult) {
+  constructor(execute, sql2, query, mapBatchResult) {
     super();
     this.execute = execute;
-    this.sql = sql3;
+    this.sql = sql2;
     this.query = query;
     this.mapBatchResult = mapBatchResult;
   }
@@ -50594,8 +50595,8 @@ var NoopCache = class extends Cache {
   async onMutate(_params) {
   }
 };
-async function hashQuery(sql3, params) {
-  const dataToHash = `${sql3}-${JSON.stringify(params)}`;
+async function hashQuery(sql2, params) {
+  const dataToHash = `${sql2}-${JSON.stringify(params)}`;
   const encoder = new TextEncoder();
   const data = encoder.encode(dataToHash);
   const hashBuffer = await crypto.subtle.digest("SHA-256", data);
@@ -50728,8 +50729,8 @@ var PgSession = class {
     ).all();
   }
   /** @internal */
-  async count(sql22, token) {
-    const res = await this.execute(sql22, token);
+  async count(sql2, token) {
+    const res = await this.execute(sql2, token);
     return Number(
       res[0]["count"]
     );
@@ -50951,8 +50952,8 @@ var NodePgSession = class _NodePgSession extends PgSession {
       if (isPool) session.client.release();
     }
   }
-  async count(sql22) {
-    const res = await this.execute(sql22);
+  async count(sql2) {
+    const res = await this.execute(sql2);
     return Number(
       res["rows"][0]["count"]
     );
@@ -63414,6 +63415,43 @@ function daysBetween(start, end) {
   const e = new Date(end);
   return Math.max(1, Math.ceil((e.getTime() - s.getTime()) / (1e3 * 60 * 60 * 24)) + 1);
 }
+function datesInRange(start, end) {
+  const dates = [];
+  const s = /* @__PURE__ */ new Date(start + "T00:00:00Z");
+  const e = /* @__PURE__ */ new Date(end + "T00:00:00Z");
+  for (let d = s; d <= e; d.setUTCDate(d.getUTCDate() + 1)) {
+    dates.push(d.toISOString().slice(0, 10));
+  }
+  return dates;
+}
+async function findUserIdForEmployee(employeeId) {
+  const [employee] = await db.select().from(employeesTable).where(eq(employeesTable.id, employeeId));
+  if (!employee) return null;
+  const [user] = await db.select().from(usersTable).where(eq(usersTable.email, employee.email));
+  return user?.id ?? null;
+}
+async function applyLeaveToAttendance(employeeId, startDate, endDate) {
+  const userId = await findUserIdForEmployee(employeeId);
+  if (!userId) return;
+  for (const date6 of datesInRange(startDate, endDate)) {
+    await db.insert(attendanceTable).values({ userId, date: date6, status: "on_leave" }).onConflictDoUpdate({
+      target: [attendanceTable.userId, attendanceTable.date],
+      set: { status: "on_leave", checkIn: null, checkOut: null, workedHours: null }
+    });
+  }
+}
+async function revertLeaveFromAttendance(employeeId, startDate, endDate) {
+  const userId = await findUserIdForEmployee(employeeId);
+  if (!userId) return;
+  await db.delete(attendanceTable).where(
+    and(
+      eq(attendanceTable.userId, userId),
+      eq(attendanceTable.status, "on_leave"),
+      gte(attendanceTable.date, startDate),
+      lte(attendanceTable.date, endDate)
+    )
+  );
+}
 router7.get("/leaves", async (req, res) => {
   const query = ListLeavesQueryParams.safeParse(req.query);
   if (!query.success) {
@@ -63479,10 +63517,21 @@ router7.patch("/leaves/:id", async (req, res) => {
   if (body.data.startDate && body.data.endDate) {
     updateData.days = daysBetween(body.data.startDate, body.data.endDate);
   }
+  const [existing] = await db.select().from(leavesTable).where(eq(leavesTable.id, params.data.id));
+  if (!existing) {
+    res.status(404).json({ error: "Leave not found" });
+    return;
+  }
   const [leave] = await db.update(leavesTable).set(updateData).where(eq(leavesTable.id, params.data.id)).returning();
   if (!leave) {
     res.status(404).json({ error: "Leave not found" });
     return;
+  }
+  const statusChanged = body.data.status && body.data.status !== existing.status;
+  if (statusChanged && leave.status === "approved") {
+    await applyLeaveToAttendance(leave.employeeId, leave.startDate, leave.endDate);
+  } else if (statusChanged && existing.status === "approved" && leave.status !== "approved") {
+    await revertLeaveFromAttendance(leave.employeeId, existing.startDate, existing.endDate);
   }
   const [emp] = await db.select().from(employeesTable).where(eq(employeesTable.id, leave.employeeId));
   res.json({
@@ -63885,6 +63934,11 @@ router11.post("/attendance/check-in", requireAuth, async (req, res) => {
     res.status(400).json({ error: "Invalid body" });
     return;
   }
+  const [existing] = await db.select().from(attendanceTable).where(and(eq(attendanceTable.userId, body.data.userId), eq(attendanceTable.date, body.data.date)));
+  if (existing?.status === "on_leave") {
+    res.status(400).json({ error: "You are on approved leave for this day" });
+    return;
+  }
   const checkIn = body.data.checkIn ?? getISTTime();
   const status = statusFromCheckIn(checkIn);
   const [record2] = await db.insert(attendanceTable).values({ userId: body.data.userId, date: body.data.date, checkIn, status }).onConflictDoUpdate({
@@ -63983,9 +64037,10 @@ router11.get("/attendance/stats", requireAuth, async (req, res) => {
   const presentDays = records.filter((r) => r.status === "present" || r.status === "late").length;
   const absentDays = records.filter((r) => r.status === "absent").length;
   const lateDays = records.filter((r) => r.status === "late").length;
+  const leaveDays = records.filter((r) => r.status === "on_leave").length;
   const workedArr = records.map((r) => r.workedHours ?? 0).filter((h) => h > 0);
   const avgWorkedHours = workedArr.length ? Math.round(workedArr.reduce((a, b) => a + b, 0) / workedArr.length * 100) / 100 : 0;
-  res.json({ totalDays, presentDays, absentDays, lateDays, avgWorkedHours });
+  res.json({ totalDays, presentDays, absentDays, lateDays, leaveDays, avgWorkedHours });
 });
 var attendance_default = router11;
 
